@@ -184,22 +184,68 @@ class Parser:
 class SemanticAnalyzer:
     def __init__(self, ast: Assignment):
         self.ast = ast
+        self.symbol_table: dict[str, int] = {}  # имя переменной -> значение
 
     def analyze(self):
-        self.check_assignment_targets(self.ast)
+        self.eval_assignment(self.ast)
 
-    def check_assignment_targets(self, node: Assignment):
-        # В любом присваивании слева может быть только VAR (не INT)
+    def get_var_value(self, name: str) -> int:
+        """Возвращает значение переменной, инициализируя её 0, если не существует."""
+        if name not in self.symbol_table:
+            self.symbol_table[name] = 0
+        return self.symbol_table[name]
+
+    def eval_assignment(self, node: Assignment) -> int:
+        if node.right is not None and node.left.postfix_incs > 0:
+            pos = node.left.operand.token.pos
+            raise ValueError(f"[Семантика] Постфиксный инкремент недопустим в левой части присваивания на позиции {pos}")
+
+        if node.right is not None:
+            right_value = self.eval_assignment(node.right)
+        else:
+            right_value = self.eval_simple_expression(node.left)
+            return right_value
+
         if node.left.operand.token.type == TokenType.INT:
             pos = node.left.operand.token.pos
-            self.error(f"Недопустимое присваивание константе на позиции {pos}")
+            raise ValueError(f"[Семантика] Присваивание литералу запрещено на позиции {pos}")
 
-        # Рекурсивно проверяем правую часть, если она — присваивание
-        if node.right is not None:
-            self.check_assignment_targets(node.right)
+        var_name = node.left.operand.token.value
 
-    def error(self, msg: str):
-        raise ValueError(f"[Семантика] {msg}")
+        self.symbol_table[var_name] = right_value
+
+        for _ in range(node.left.prefix_incs):
+            self.symbol_table[var_name] += 1
+
+        return self.symbol_table[var_name]
+
+    def eval_simple_expression(self, expr: SimpleExpression) -> int:
+        if expr.operand.token.type == TokenType.INT:
+            base_value = int(expr.operand.token.value)
+            if expr.prefix_incs > 0 or expr.postfix_incs > 0:
+                pos = expr.operand.token.pos
+                raise ValueError(f"[Семантика] Инкремент недопустим для литерала на позиции {pos}")
+            return base_value
+
+        # Это VAR
+        var_name = expr.operand.token.value
+
+        # Получаем текущее значение (инициализируем 0, если нужно)
+        value = self.get_var_value(var_name)
+
+        # Сохраняем начальное значение для постфиксного возврата
+        result_value = value
+
+        # Префиксные инкременты: сразу увеличиваем и обновляем
+        for _ in range(expr.prefix_incs):
+            self.symbol_table[var_name] += 1
+            result_value = self.symbol_table[var_name]
+
+        # Постфиксные: увеличиваем, но возвращаем старое значение
+        for _ in range(expr.postfix_incs):
+            self.symbol_table[var_name] += 1
+
+        return result_value
 
 # ------------------------------
 # 5. Основная программа
@@ -216,8 +262,12 @@ def main():
             with open(args.input_file, 'r', encoding='utf-8') as f:
                 source = f.read()
         else:
-            print("Введите выражение (Ctrl+D/Ctrl+Z для завершения):", file=sys.stderr)
+            print("Введите выражение (Ctrl+Z + Enter в Windows, Ctrl+D в Linux):", file=sys.stderr)
             source = sys.stdin.read()
+
+        if not source.strip():
+            print("Ошибка: пустой ввод", file=sys.stderr)
+            sys.exit(1)
 
         scanner = Scanner(source)
         tokens = scanner.scan()
@@ -228,7 +278,13 @@ def main():
         sem = SemanticAnalyzer(ast)
         sem.analyze()
 
-        print("Успешно: выражение корректно и семантически допустимо.")
+        if sem.symbol_table:
+            print("Успешно: выражение корректно.")
+            print("Значения переменных:")
+            for var, val in sorted(sem.symbol_table.items()):
+                print(f"  {var} = {val}")
+        else:
+            print("Успешно: выражение корректно (без переменных для вывода).")
 
     except (SyntaxError, ValueError) as e:
         print(f"Ошибка: {e}", file=sys.stderr)
