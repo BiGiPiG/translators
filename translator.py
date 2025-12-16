@@ -178,21 +178,22 @@ class Parser:
         raise SyntaxError(f"[Парсер] Ошибка на позиции {pos}: {msg}")
 
 # ------------------------------
-# 4. Семантический анализатор
+# 4. Семантический анализатор (обновлённый)
 # ------------------------------
 
 class SemanticAnalyzer:
-    def __init__(self, ast: Assignment):
+    def __init__(self, ast: Assignment, symbol_table: dict):
         self.ast = ast
-        self.symbol_table: dict[str, int] = {}  # имя переменной -> значение
+        # Используем ВНЕШНЮЮ таблицу символов (для поддержки многострочности)
+        self.symbol_table = symbol_table
 
     def analyze(self):
-        self.eval_assignment(self.ast)
+        return self.eval_assignment(self.ast)
 
     def get_var_value(self, name: str) -> int:
-        """Возвращает значение переменной, инициализируя её 0, если не существует."""
+        """Возвращает значение переменной. Ошибка, если не инициализирована."""
         if name not in self.symbol_table:
-            self.symbol_table[name] = 0
+            raise ValueError(f"Переменная '{name}' не инициализирована")
         return self.symbol_table[name]
 
     def eval_assignment(self, node: Assignment) -> int:
@@ -227,28 +228,23 @@ class SemanticAnalyzer:
                 raise ValueError(f"[Семантика] Инкремент недопустим для литерала на позиции {pos}")
             return base_value
 
-        # Это VAR
         var_name = expr.operand.token.value
-
-        # Получаем текущее значение (инициализируем 0, если нужно)
         value = self.get_var_value(var_name)
-
-        # Сохраняем начальное значение для постфиксного возврата
         result_value = value
 
-        # Префиксные инкременты: сразу увеличиваем и обновляем
+        # Префиксные инкременты
         for _ in range(expr.prefix_incs):
             self.symbol_table[var_name] += 1
             result_value = self.symbol_table[var_name]
 
-        # Постфиксные: увеличиваем, но возвращаем старое значение
+        # Постфиксные инкременты
         for _ in range(expr.postfix_incs):
             self.symbol_table[var_name] += 1
 
         return result_value
 
 # ------------------------------
-# 5. Основная программа
+# 5. Основная программа (обновлённая)
 # ------------------------------
 
 def main():
@@ -260,35 +256,46 @@ def main():
     try:
         if args.input_file:
             with open(args.input_file, 'r', encoding='utf-8') as f:
-                source = f.read()
+                lines = f.readlines()
         else:
-            print("Введите выражение (Ctrl+Z + Enter в Windows, Ctrl+D в Linux):", file=sys.stderr)
-            source = sys.stdin.read()
+            print("Введите выражения (по одному на строку, Ctrl+D/Ctrl+Z для завершения):", file=sys.stderr)
+            lines = sys.stdin.readlines()
 
-        if not source.strip():
+        # Удаляем пустые строки и сохраняем номера
+        non_empty_lines = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped:
+                non_empty_lines.append((i, stripped))
+
+        if not non_empty_lines:
             print("Ошибка: пустой ввод", file=sys.stderr)
             sys.exit(1)
 
-        scanner = Scanner(source)
-        tokens = scanner.scan()
+        # Общая таблица символов для всех строк
+        symbol_table = {}
 
-        parser = Parser(tokens)
-        ast = parser.parse()
+        for line_num, line in non_empty_lines:
+            try:
+                scanner = Scanner(line)
+                tokens = scanner.scan()
+                parser_obj = Parser(tokens)
+                ast = parser_obj.parse()
+                sem = SemanticAnalyzer(ast, symbol_table)
+                sem.analyze()
+            except (SyntaxError, ValueError) as e:
+                print(f"Ошибка в строке {line_num}: {e}", file=sys.stderr)
+                sys.exit(1)
 
-        sem = SemanticAnalyzer(ast)
-        sem.analyze()
-
-        if sem.symbol_table:
-            print("Успешно: выражение корректно.")
+        # Вывод результата
+        if symbol_table:
+            print("Успешно: все выражения корректны.")
             print("Значения переменных:")
-            for var, val in sorted(sem.symbol_table.items()):
+            for var, val in sorted(symbol_table.items()):
                 print(f"  {var} = {val}")
         else:
-            print("Успешно: выражение корректно (без переменных для вывода).")
+            print("Успешно: выражения корректны (без переменных).")
 
-    except (SyntaxError, ValueError) as e:
-        print(f"Ошибка: {e}", file=sys.stderr)
-        sys.exit(1)
     except Exception as e:
         print(f"Внутренняя ошибка: {e}", file=sys.stderr)
         sys.exit(2)
